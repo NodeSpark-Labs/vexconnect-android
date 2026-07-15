@@ -20,8 +20,11 @@ data class VexConnectSession(
     val dappName: String,
     val dappUrl: String,
     val dappIcon: String?,
-    /** AES-256-GCM key, out-of-band via the deep link/QR — relay never sees it. */
-    val key: ByteArray,
+    /** dApp's X25519 *public* key, out-of-band via the deep link/QR. Not a
+     * secret — the actual AES session key is derived via ECDH once the
+     * wallet generates its own ephemeral keypair (see VexConnect.connect()),
+     * so nothing sensitive ever travels through the QR/URI or the relay. */
+    val dappPublicKey: ByteArray,
 ) {
     companion object {
         private const val B64_URL_FLAGS = Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
@@ -38,9 +41,9 @@ data class VexConnectSession(
             val name  = uri.getQueryParameter("name")  ?: return null
             val url   = uri.getQueryParameter("url")   ?: return null
             val icon  = uri.getQueryParameter("icon")
-            val keyB64 = uri.getQueryParameter("key")  ?: return null
-            val key = try { Base64.decode(keyB64, B64_URL_FLAGS) } catch (_: IllegalArgumentException) { return null }
-            return VexConnectSession(sid, relay, name, url, icon, key)
+            val pubB64 = uri.getQueryParameter("pub")  ?: return null
+            val pub = try { Base64.decode(pubB64, B64_URL_FLAGS) } catch (_: IllegalArgumentException) { return null }
+            return VexConnectSession(sid, relay, name, url, icon, pub)
         }
 
         fun fromUriString(raw: String): VexConnectSession? =

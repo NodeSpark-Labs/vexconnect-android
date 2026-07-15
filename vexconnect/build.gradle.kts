@@ -28,6 +28,10 @@ android {
 
 dependencies {
     implementation(libs.okhttp)
+    // X25519 ECDH + HKDF for the session key handshake - pure Java, no native
+    // code, works down to minSdk 21 (Android's own XDH crypto provider
+    // support is inconsistent/absent on older API levels).
+    implementation(libs.bouncycastle)
 }
 
 afterEvaluate {
