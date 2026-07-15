@@ -4,7 +4,12 @@ import android.net.Uri
 import android.util.Base64
 
 /**
- * Parsed VexConnect session info from a vexconnect:// deep link.
+ * Parsed VexConnect session info from a vexconnect:// deep link — or from an
+ * https:// Android App Link that wraps it (`https://yourwallet.app/wc?uri=<encoded
+ * vexconnect://...>`), the form used when the wallet has registered its own
+ * /.well-known/assetlinks.json. Which form the OS hands to the app depends on
+ * how the wallet registered its intent-filter; this handles both so wallet
+ * devs can pick either without extra glue code.
  *
  * Usage:
  *   val session = VexConnectSession.fromUri(intent.data) ?: return
@@ -22,6 +27,11 @@ data class VexConnectSession(
         private const val B64_URL_FLAGS = Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
 
         fun fromUri(uri: Uri): VexConnectSession? {
+            // App Link wrapper: unwrap `uri` and parse the real pairing URI inside.
+            if (uri.scheme == "https" || uri.scheme == "http") {
+                val wrapped = uri.getQueryParameter("uri") ?: return null
+                return fromUriString(wrapped)
+            }
             if (uri.scheme != "vexconnect") return null
             val sid   = uri.getQueryParameter("sid")   ?: return null
             val relay = uri.getQueryParameter("relay") ?: return null
