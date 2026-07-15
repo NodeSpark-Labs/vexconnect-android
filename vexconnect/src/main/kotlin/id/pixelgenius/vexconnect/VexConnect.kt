@@ -115,6 +115,14 @@ class VexConnect(private val session: VexConnectSession) {
                         close()
                         onDisconnect?.invoke()
                     }
+                    // Liveness check the dApp sends both to confirm a resumed
+                    // session is still alive, and periodically during an
+                    // active one (catches a silently-dropped connection).
+                    // No payload, so no decrypt/encrypt needed either way.
+                    "ping" -> sendWire(JSONObject().apply {
+                        put("type", "pong")
+                        put("topic", session.sessionId)
+                    })
                 }
             } catch (_: Exception) { }
         }
