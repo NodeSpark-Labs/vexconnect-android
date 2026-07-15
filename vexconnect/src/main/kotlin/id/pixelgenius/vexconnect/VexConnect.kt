@@ -1,230 +1,259 @@
 package id.pixelgenius.vexconnect
 
-import okhttp3.*
-import org.json.JSONObject
-import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
+import android.net.Uri
+import android.util.Base64
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+object VexConnect {
+
+    /**
+     * Parses a vexconnect:// URI. The `pub=` parameter carries the dApp's ephemeral
+     * X25519 public key (base64url-encoded). The wallet generates its own keypair on
+     * approval and derives the shared AES-256-GCM session key via ECDH + HKDF-SHA256.
+     *
+     * Format: vexconnect://wc?sid=UUID&relay=wss://HOST&name=DApp&url=https://...&pub=BASE64URL&icon=...
+     */
+    fun parseUri(raw: String): VexConnectUri? = runCatching {
+        var uri = Uri.parse(raw)
+        // Unwrap App Link / Universal Link: https://wallet.app/wc?uri=vexconnect://...
+        if (uri.scheme == "https" || uri.scheme == "http") {
+            uri = Uri.parse(uri.getQueryParameter("uri") ?: return null)
+        }
+        if (uri.scheme != "vexconnect") return null
+        val pubB64 = uri.getQueryParameter("pub") ?: return null
+        val dappPublicKey = try {
+            Base64.decode(pubB64, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+        } catch (_: IllegalArgumentException) { return null }
+        VexConnectUri(
+            sessionId     = uri.getQueryParameter("sid")   ?: return null,
+            relayUrl      = uri.getQueryParameter("relay") ?: return null,
+            dappName      = uri.getQueryParameter("name")  ?: "Unknown dApp",
+            dappUrl       = uri.getQueryParameter("url")   ?: "",
+            dappIcon      = uri.getQueryParameter("icon"),
+            dappPublicKey = dappPublicKey,
+        )
+    }.getOrNull()
+
+    /**
+     * Creates a [VexConnectBridge] for a new session from a scanned URI.
+     * Generates an ephemeral X25519 keypair, derives the AES session key via ECDH+HKDF,
+     * and stores the wallet's public key for inclusion in the approve/reject response.
+     */
+    fun createBridge(
+        uri: VexConnectUri,
+        account: String,
+        publicKey: String,
+    ): VexConnectBridge {
+        val (walletPrivKey, walletPubKey) = CryptoBox.generateX25519KeyPair()
+        val sessionKey = CryptoBox.deriveSessionKey(walletPrivKey, uri.dappPublicKey)
+        val walletPubKeyB64 = Base64.encodeToString(
+            walletPubKey,
+            Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP,
+        )
+
+        val relay = RelayClient(relayUrl = uri.relayUrl, topic = uri.sessionId, key = sessionKey)
+        relay.connect()
+        val bridge = VexConnectBridge(
+            pendingSession  = PendingSession(
+                sessionId = uri.sessionId,
+                dappName  = uri.dappName,
+                dappUrl   = uri.dappUrl,
+                dappIcon  = uri.dappIcon,
+            ),
+            relayClient     = relay,
+            account         = account,
+            publicKey       = publicKey,
+            relayUrl        = uri.relayUrl,
+            key             = sessionKey,
+            walletPubKeyB64 = walletPubKeyB64,
+        )
+        bridge.startListening()
+        return bridge
+    }
+
+    /**
+     * Re-creates a [VexConnectBridge] from a persisted session. ECDH was already performed
+     * during the original session — the derived AES key is passed directly.
+     */
+    fun createBridgeRestored(
+        sessionId: String,
+        relayUrl: String,
+        dappName: String,
+        dappUrl: String,
+        dappIcon: String?,
+        derivedKey: ByteArray,
+        account: String,
+        publicKey: String,
+    ): VexConnectBridge {
+        val relay = RelayClient(relayUrl = relayUrl, topic = sessionId, key = derivedKey)
+        relay.connect()
+        val bridge = VexConnectBridge(
+            pendingSession  = PendingSession(
+                sessionId = sessionId,
+                dappName  = dappName,
+                dappUrl   = dappUrl,
+                dappIcon  = dappIcon,
+            ),
+            relayClient     = relay,
+            account         = account,
+            publicKey       = publicKey,
+            relayUrl        = relayUrl,
+            key             = derivedKey,
+            walletPubKeyB64 = null,
+        )
+        bridge.startListening()
+        return bridge
+    }
+}
 
 /**
- * Wallet-side VexConnect client.
+ * Active bridge between the wallet and a single dApp session over the relay.
  *
- * Usage (inside your wallet Activity / ViewModel):
- *
- *   val session = VexConnectSession.fromUri(intent.data) ?: return
- *   val vc = VexConnect(session)
- *   vc.onTransactionRequest = { req -> /* show confirmation UI */ }
- *   vc.onDisconnect = { /* dApp disconnected */ }
- *   vc.connect()
- *   // after user confirms:
- *   vc.approve(account = "myaccount", publicKey = "VEX_PUB_KEY...")
- *
- * The session's AES key is never carried in the URI/QR — it's derived here
- * via X25519 ECDH against the dApp's public key from the URI (own ephemeral
- * keypair generated per pairing), matching WalletConnect v2's session key
- * derivation. This can be computed immediately, no round trip needed - the
- * dApp's public key is already known from the parsed URI.
+ * Lifecycle:
+ * 1. Created via [VexConnect.createBridge] — relay is already connected.
+ * 2. Show approval UI; collect [events] for incoming requests and disconnect events.
+ * 3. Call [approve] or [reject].
+ * 4. Call [disconnect] when done or when [VexConnectEvent.Disconnected] is received.
  */
-class VexConnect(private val session: VexConnectSession) {
+class VexConnectBridge internal constructor(
+    val pendingSession: PendingSession,
+    private val relayClient: RelayClient,
+    val account: String,
+    val publicKey: String,
+    /** Stored so the session can be persisted and restored after app restart. */
+    val relayUrl: String,
+    val key: ByteArray,
+    /** Wallet's ephemeral X25519 public key sent back to dApp in approve/reject. Null for restored sessions. */
+    private val walletPubKeyB64: String?,
+) {
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    var onTransactionRequest: ((TransactionRequest) -> Unit)? = null
-    var onDisconnect: (() -> Unit)? = null
-    var onError: ((Throwable) -> Unit)? = null
+    private val _events = MutableSharedFlow<VexConnectEvent>(
+        extraBufferCapacity = 8,
+        onBufferOverflow    = BufferOverflow.DROP_OLDEST,
+    )
 
-    private val keyPair = CryptoBox.generateX25519KeyPair()
-    private val sessionKey = CryptoBox.deriveSessionKey(keyPair.secretKey, session.dappPublicKey)
+    /** Flow of session events. Collect on Main for safe UI updates. */
+    val events: SharedFlow<VexConnectEvent> = _events
 
-    private val client = OkHttpClient.Builder()
-        .pingInterval(30, TimeUnit.SECONDS)
-        .build()
+    private val _isReconnecting = MutableStateFlow(false)
+    /** True while the relay WebSocket is trying to reconnect after an unexpected drop. */
+    val isReconnecting: StateFlow<Boolean> = _isReconnecting
 
-    private var ws: WebSocket? = null
-    private var closedIntentionally = false
-
-    // Exponential backoff reconnect (1s, 2s, 4s, 8s, 16s, then give up and
-    // surface onDisconnect) - mirrors the JS SDK's core.ts so a backgrounded
-    // app or a brief network drop doesn't kill the session outright.
-    private val reconnectExecutor = Executors.newSingleThreadScheduledExecutor()
-    private var reconnectAttempt = 0
-    private var reconnectTask: ScheduledFuture<*>? = null
-
-    // ── Connection ────────────────────────────────────────────────────────────
-
-    fun connect() {
-        val request = Request.Builder().url(session.relayUrl).build()
-        ws = client.newWebSocket(request, listener)
+    suspend fun approve() = withContext(Dispatchers.IO) {
+        relayClient.sendMessage(
+            type = "session_approve",
+            payload = mapOf(
+                "approved"  to true,
+                "account"   to account,
+                "publicKey" to publicKey,
+            ),
+            pub = walletPubKeyB64,
+        )
     }
 
-    /** Call when the app returns to the foreground or network connectivity is
-     * restored - resets the backoff series and retries immediately instead of
-     * waiting out whatever delay was already scheduled. */
-    fun reconnectIfNeeded() {
-        if (ws != null || closedIntentionally) return
-        reconnectTask?.cancel(false)
-        reconnectAttempt = 0
-        connect()
+    suspend fun reject(reason: String = "User rejected") = withContext(Dispatchers.IO) {
+        relayClient.sendMessage(
+            type = "session_reject",
+            payload = mapOf("reason" to reason),
+            pub = walletPubKeyB64,
+        )
+        relayClient.close()
     }
 
-    private fun scheduleReconnect() {
-        if (closedIntentionally || reconnectTask != null) return
-        if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
-            reconnectAttempt = 0
-            onDisconnect?.invoke()
-            return
+    suspend fun respondSuccess(requestId: String, txId: String, blockNum: Long) =
+        withContext(Dispatchers.IO) {
+            relayClient.sendMessage(
+                type = "response",
+                payload = mapOf(
+                    "requestId" to requestId,
+                    "txId"      to txId,
+                    "blockNum"  to blockNum,
+                ),
+            )
         }
-        val delayMs = (BASE_RECONNECT_DELAY_MS shl reconnectAttempt).coerceAtMost(MAX_RECONNECT_DELAY_MS)
-        reconnectAttempt++
-        reconnectTask = reconnectExecutor.schedule({
-            reconnectTask = null
-            connect()
-        }, delayMs, TimeUnit.MILLISECONDS)
+
+    suspend fun respondError(requestId: String, error: String) = withContext(Dispatchers.IO) {
+        relayClient.sendMessage(
+            type = "response",
+            payload = mapOf(
+                "requestId" to requestId,
+                "error"     to error,
+            ),
+        )
     }
 
-    // ── Session control ───────────────────────────────────────────────────────
-
-    fun approve(account: String, publicKey: String) {
-        sendEncrypted("session_approve", JSONObject().apply {
-            put("account", account)
-            put("publicKey", publicKey)
-        }, includePub = true)
-    }
-
-    fun reject(reason: String = "User rejected") {
-        sendEncrypted("session_reject", JSONObject().apply { put("reason", reason) }, includePub = true)
-        close()
-    }
+    /** Triggers an immediate reconnect attempt, bypassing the current backoff delay.
+     * Safe to call at any time (network-back, app-foregrounded). No-op if already connected. */
+    fun reconnectNow() = relayClient.reconnectNow()
 
     fun disconnect() {
-        sendEncrypted("session_delete", JSONObject())
-        close()
+        relayClient.sendMessage(type = "session_delete", payload = emptyMap())
+        relayClient.close()
     }
 
-    // ── Transaction ───────────────────────────────────────────────────────────
+    internal fun startListening() {
+        relayClient.events
+            .onEach { msg -> handleIncoming(msg) }
+            .onCompletion { _events.tryEmit(VexConnectEvent.Disconnected(pendingSession.sessionId)) }
+            .catch { /* network errors handled by onCompletion */ }
+            .launchIn(scope)
 
-    fun sendTransactionResult(requestId: String, txId: String, blockNum: Long) {
-        sendEncrypted("response", JSONObject().apply {
-            put("requestId", requestId)
-            put("txId", txId)
-            put("blockNum", blockNum)
-        })
-    }
-
-    fun sendTransactionError(requestId: String, error: String) {
-        sendEncrypted("response", JSONObject().apply {
-            put("requestId", requestId)
-            put("error", error)
-        })
-    }
-
-    // ── Private ───────────────────────────────────────────────────────────────
-
-    private val listener = object : WebSocketListener() {
-        override fun onOpen(webSocket: WebSocket, response: Response) {
-            reconnectAttempt = 0
-            sendWire(JSONObject().apply {
-                put("type", "subscribe")
-                put("topic", session.sessionId)
-            })
-        }
-
-        override fun onMessage(webSocket: WebSocket, text: String) {
-            try {
-                val wire = JSONObject(text)
-                val payload = wire.optJSONObject("payload")?.let { env ->
-                    JSONObject(CryptoBox.decrypt(
-                        sessionKey,
-                        CryptoBox.Envelope(env.getString("iv"), env.getString("ct")),
-                    ))
-                }
-                when (wire.optString("type")) {
-                    "request" -> {
-                        payload ?: return
-                        val requestId = payload.optString("requestId").ifEmpty { return }
-                        val actionsArr = payload.optJSONArray("actions") ?: return
-                        val actions = (0 until actionsArr.length()).mapNotNull { i ->
-                            val a = actionsArr.optJSONObject(i) ?: return@mapNotNull null
-                            val account = a.optString("account").ifEmpty { return@mapNotNull null }
-                            val name    = a.optString("name").ifEmpty { return@mapNotNull null }
-                            val authArr = a.optJSONArray("authorization")
-                            val authorization = (0 until (authArr?.length() ?: 0)).mapNotNull { j ->
-                                val auth = authArr?.optJSONObject(j) ?: return@mapNotNull null
-                                Authorization(auth.optString("actor"), auth.optString("permission"))
-                            }
-                            @Suppress("UNCHECKED_CAST")
-                            val data = (a.optJSONObject("data")?.toMap() ?: emptyMap<String, Any?>()) as Map<String, Any?>
-                            AntelopeAction(account, name, authorization, data)
-                        }
-                        onTransactionRequest?.invoke(TransactionRequest(requestId, actions))
-                    }
-                    "session_delete" -> {
-                        close()
-                        onDisconnect?.invoke()
-                    }
-                    // Liveness check the dApp sends both to confirm a resumed
-                    // session is still alive, and periodically during an
-                    // active one (catches a silently-dropped connection).
-                    // No payload, so no decrypt/encrypt needed either way.
-                    "ping" -> sendWire(JSONObject().apply {
-                        put("type", "pong")
-                        put("topic", session.sessionId)
-                    })
-                }
-            } catch (_: Exception) { }
-        }
-
-        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            ws = null
-            onError?.invoke(t)
-            scheduleReconnect()
-        }
-
-        override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            ws = null
-            if (closedIntentionally) {
-                onDisconnect?.invoke()
-            } else {
-                scheduleReconnect()
+        // Sync isReconnecting flag dari RelayClient ke StateFlow yang bisa di-observe UI
+        scope.launch {
+            while (true) {
+                _isReconnecting.value = relayClient.isReconnecting
+                delay(500)
             }
         }
     }
 
-    /** type/topic stay plain for relay routing; payload is AES-256-GCM ciphertext
-     * it can't read. `includePub` attaches this wallet's ephemeral X25519 public
-     * key in the clear - only needed on the first message the dApp will ever
-     * receive from us (approve or reject), so it can derive the same session
-     * key via ECDH; every later message is skipped since the dApp only reads
-     * `pub` once, before it has a session key at all. */
-    private fun sendEncrypted(type: String, payload: JSONObject, includePub: Boolean = false) {
-        val env = CryptoBox.encrypt(sessionKey, payload.toString())
-        sendWire(JSONObject().apply {
-            put("type", type)
-            put("topic", session.sessionId)
-            put("payload", JSONObject().apply {
-                put("iv", env.iv)
-                put("ct", env.ct)
-            })
-            if (includePub) put("pub", CryptoBox.b64Url(keyPair.publicKey))
-        })
-    }
-
-    private fun sendWire(json: JSONObject) {
-        ws?.send(json.toString())
-    }
-
-    private fun close() {
-        closedIntentionally = true
-        reconnectTask?.cancel(false)
-        // newSingleThreadScheduledExecutor() threads are non-daemon by
-        // default - leaving this running would leak a thread (and could even
-        // keep the process alive) for the rest of the app's lifetime.
-        reconnectExecutor.shutdownNow()
-        ws?.close(1000, null)
-        ws = null
-    }
-
-    private companion object {
-        const val BASE_RECONNECT_DELAY_MS = 1_000L
-        const val MAX_RECONNECT_DELAY_MS  = 16_000L
-        const val MAX_RECONNECT_ATTEMPTS  = 5
+    @Suppress("UNCHECKED_CAST")
+    private fun handleIncoming(msg: Map<String, Any?>) {
+        when (msg["type"] as? String) {
+            "request" -> {
+                val payload    = msg["payload"] as? Map<String, Any?> ?: return
+                val requestId  = payload["requestId"] as? String ?: return
+                val actionsRaw = payload["actions"] as? List<*> ?: return
+                val actions = actionsRaw.mapNotNull { item ->
+                    val a       = item as? Map<String, Any?> ?: return@mapNotNull null
+                    val account = a["account"] as? String ?: return@mapNotNull null
+                    val name    = a["name"]    as? String ?: return@mapNotNull null
+                    val authRaw = a["authorization"] as? List<*> ?: emptyList<Any>()
+                    val auth = authRaw.mapNotNull { authItem ->
+                        val m = authItem as? Map<String, Any?> ?: return@mapNotNull null
+                        Authorization(
+                            actor      = m["actor"]      as? String ?: return@mapNotNull null,
+                            permission = m["permission"] as? String ?: return@mapNotNull null,
+                        )
+                    }
+                    val data = (a["data"] as? Map<String, Any?>) ?: emptyMap()
+                    AntelopeAction(account, name, auth, data)
+                }
+                if (actions.isEmpty()) return
+                _events.tryEmit(VexConnectEvent.TransactionRequest(
+                    VexConnectRequest(
+                        requestId = requestId,
+                        sessionId = pendingSession.sessionId,
+                        actions   = actions,
+                    )
+                ))
+            }
+            "session_delete" -> relayClient.close() // onCompletion emits Disconnected
+        }
     }
 }
