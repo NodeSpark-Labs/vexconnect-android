@@ -39,56 +39,36 @@ class VexConnect(private val session: VexConnectSession) {
     // ── Session control ───────────────────────────────────────────────────────
 
     fun approve(account: String, publicKey: String) {
-        send(JSONObject().apply {
-            put("type", "session_approve")
-            put("topic", session.sessionId)
-            put("payload", JSONObject().apply {
-                put("account", account)
-                put("publicKey", publicKey)
-            })
+        sendEncrypted("session_approve", JSONObject().apply {
+            put("account", account)
+            put("publicKey", publicKey)
         })
     }
 
     fun reject(reason: String = "User rejected") {
-        send(JSONObject().apply {
-            put("type", "session_reject")
-            put("topic", session.sessionId)
-            put("payload", JSONObject().apply { put("reason", reason) })
-        })
+        sendEncrypted("session_reject", JSONObject().apply { put("reason", reason) })
         close()
     }
 
     fun disconnect() {
-        send(JSONObject().apply {
-            put("type", "session_delete")
-            put("topic", session.sessionId)
-            put("payload", JSONObject())
-        })
+        sendEncrypted("session_delete", JSONObject())
         close()
     }
 
     // ── Transaction ───────────────────────────────────────────────────────────
 
     fun sendTransactionResult(requestId: String, txId: String, blockNum: Long) {
-        send(JSONObject().apply {
-            put("type", "response")
-            put("topic", session.sessionId)
-            put("payload", JSONObject().apply {
-                put("requestId", requestId)
-                put("txId", txId)
-                put("blockNum", blockNum)
-            })
+        sendEncrypted("response", JSONObject().apply {
+            put("requestId", requestId)
+            put("txId", txId)
+            put("blockNum", blockNum)
         })
     }
 
     fun sendTransactionError(requestId: String, error: String) {
-        send(JSONObject().apply {
-            put("type", "response")
-            put("topic", session.sessionId)
-            put("payload", JSONObject().apply {
-                put("requestId", requestId)
-                put("error", error)
-            })
+        sendEncrypted("response", JSONObject().apply {
+            put("requestId", requestId)
+            put("error", error)
         })
     }
 
@@ -96,7 +76,7 @@ class VexConnect(private val session: VexConnectSession) {
 
     private val listener = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            send(JSONObject().apply {
+            sendWire(JSONObject().apply {
                 put("type", "subscribe")
                 put("topic", session.sessionId)
             })
@@ -104,10 +84,16 @@ class VexConnect(private val session: VexConnectSession) {
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             try {
-                val msg = JSONObject(text)
-                when (msg.optString("type")) {
+                val wire = JSONObject(text)
+                val payload = wire.optJSONObject("payload")?.let { env ->
+                    JSONObject(CryptoBox.decrypt(
+                        session.key,
+                        CryptoBox.Envelope(env.getString("iv"), env.getString("ct")),
+                    ))
+                }
+                when (wire.optString("type")) {
                     "request" -> {
-                        val payload = msg.optJSONObject("payload") ?: return
+                        payload ?: return
                         val requestId = payload.optString("requestId").ifEmpty { return }
                         val action    = payload.optString("action").ifEmpty { return }
                         val paramsObj = payload.optJSONObject("params")
@@ -133,7 +119,20 @@ class VexConnect(private val session: VexConnectSession) {
         }
     }
 
-    private fun send(json: JSONObject) {
+    /** type/topic stay plain for relay routing; payload is AES-256-GCM ciphertext it can't read. */
+    private fun sendEncrypted(type: String, payload: JSONObject) {
+        val env = CryptoBox.encrypt(session.key, payload.toString())
+        sendWire(JSONObject().apply {
+            put("type", type)
+            put("topic", session.sessionId)
+            put("payload", JSONObject().apply {
+                put("iv", env.iv)
+                put("ct", env.ct)
+            })
+        })
+    }
+
+    private fun sendWire(json: JSONObject) {
         ws?.send(json.toString())
     }
 
