@@ -95,12 +95,21 @@ class VexConnect(private val session: VexConnectSession) {
                     "request" -> {
                         payload ?: return
                         val requestId = payload.optString("requestId").ifEmpty { return }
-                        val action    = payload.optString("action").ifEmpty { return }
-                        val paramsObj = payload.optJSONObject("params")
-                        val params    = buildMap<String, String> {
-                            paramsObj?.keys()?.forEach { k -> put(k, paramsObj.optString(k)) }
+                        val actionsArr = payload.optJSONArray("actions") ?: return
+                        val actions = (0 until actionsArr.length()).mapNotNull { i ->
+                            val a = actionsArr.optJSONObject(i) ?: return@mapNotNull null
+                            val account = a.optString("account").ifEmpty { return@mapNotNull null }
+                            val name    = a.optString("name").ifEmpty { return@mapNotNull null }
+                            val authArr = a.optJSONArray("authorization")
+                            val authorization = (0 until (authArr?.length() ?: 0)).mapNotNull { j ->
+                                val auth = authArr?.optJSONObject(j) ?: return@mapNotNull null
+                                Authorization(auth.optString("actor"), auth.optString("permission"))
+                            }
+                            @Suppress("UNCHECKED_CAST")
+                            val data = (a.optJSONObject("data")?.toMap() ?: emptyMap<String, Any?>()) as Map<String, Any?>
+                            AntelopeAction(account, name, authorization, data)
                         }
-                        onTransactionRequest?.invoke(TransactionRequest(requestId, action, params))
+                        onTransactionRequest?.invoke(TransactionRequest(requestId, actions))
                     }
                     "session_delete" -> {
                         close()
