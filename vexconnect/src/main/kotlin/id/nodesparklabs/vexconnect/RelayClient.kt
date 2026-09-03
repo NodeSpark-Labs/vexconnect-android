@@ -1,4 +1,4 @@
-package id.pixelgenius.vexconnect
+package id.nodesparklabs.vexconnect
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
