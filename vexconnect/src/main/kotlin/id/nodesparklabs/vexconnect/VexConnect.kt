@@ -1,4 +1,4 @@
-package id.pixelgenius.vexconnect
+package id.nodesparklabs.vexconnect
 
 import android.net.Uri
 import android.util.Base64

@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace   = "id.pixelgenius.vexconnect"
+    namespace   = "id.nodesparklabs.vexconnect"
     compileSdk  = 35
 
     defaultConfig {
@@ -40,7 +40,7 @@ afterEvaluate {
         publications {
             create<MavenPublication>("release") {
                 from(components["release"])
-                groupId    = "id.pixelgenius"
+                groupId    = "id.nodesparklabs"
                 artifactId = "vexconnect"
                 version    = "1.0.0"
             }

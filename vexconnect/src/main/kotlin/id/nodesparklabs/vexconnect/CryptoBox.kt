@@ -1,4 +1,4 @@
-package id.pixelgenius.vexconnect
+package id.nodesparklabs.vexconnect
 
 import android.util.Base64
 import org.bouncycastle.crypto.agreement.X25519Agreement

@@ -1,4 +1,4 @@
-package id.pixelgenius.vexconnect
+package id.nodesparklabs.vexconnect
 
 /**
  * Parsed representation of a vexconnect:// URI scanned from a QR code.
