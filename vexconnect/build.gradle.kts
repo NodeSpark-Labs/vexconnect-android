@@ -45,5 +45,15 @@ afterEvaluate {
                 version    = "1.0.0"
             }
         }
+        repositories {
+            maven {
+                name = "GitHubPackages"
+                url = uri("https://maven.pkg.github.com/NodeSpark-Labs/vexconnect-android")
+                credentials {
+                    username = System.getenv("GITHUB_ACTOR")
+                    password = System.getenv("GITHUB_TOKEN")
+                }
+            }
+        }
     }
 }
