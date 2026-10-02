@@ -1,12 +1,11 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     `maven-publish`
 }
 
 android {
     namespace   = "id.nodesparklabs.vexconnect"
-    compileSdk  = 35
+    compileSdk  = 37
 
     defaultConfig {
         minSdk = 21
@@ -15,10 +14,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
     }
 
     publishing {
@@ -42,7 +37,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId    = "id.nodesparklabs"
                 artifactId = "vexconnect"
-                version    = "1.0.0"
+                version    = "1.0.1"
             }
         }
     }
