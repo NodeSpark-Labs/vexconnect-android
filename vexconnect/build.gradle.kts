@@ -35,9 +35,9 @@ afterEvaluate {
         publications {
             create<MavenPublication>("release") {
                 from(components["release"])
-                groupId    = "id.nodesparklabs"
-                artifactId = "vexconnect"
-                version    = "1.0.1"
+                groupId    = "com.github.NodeSpark-Labs"
+                artifactId = "vexconnect-android"
+                version    = "1.0.2"
             }
         }
         repositories {
