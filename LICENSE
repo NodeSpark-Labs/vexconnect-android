@@ -1,4 +1,4 @@
-VexConnect Non-Commercial No-Derivatives License
+VexConnect No-Derivatives License
 
 Copyright (c) 2026 PT Nodespark Digital Tech. All rights reserved.
 
@@ -8,13 +8,14 @@ compiled libraries and documentation (the "Software").
 1. Permitted use
 
    Subject to the terms below, PT Nodespark Digital Tech grants you a
-   free, non-exclusive, non-transferable, revocable license to:
+   free, worldwide, non-exclusive, non-transferable license to:
 
-   a. use the Software, and include it as an unmodified dependency in
-      your own application, for non-commercial purposes; and
-   b. copy and redistribute the Software in unmodified form for
-      non-commercial purposes, provided this license and the copyright
-      notice above are kept intact.
+   a. use the Software as an unmodified dependency in your own
+      applications, including commercial applications such as wallets
+      and dApps; and
+   b. distribute the Software in unmodified form as part of those
+      applications, provided this license and the copyright notice above
+      are kept intact.
 
 2. Restrictions
 
@@ -22,26 +23,25 @@ compiled libraries and documentation (the "Software").
 
    a. modify, adapt, translate or create derivative works of the
       Software, in whole or in part;
-   b. use the Software for any commercial purpose, including in a
-      product or service that is sold, licensed for a fee, supported by
-      paid subscriptions or advertising, or otherwise used to generate
-      revenue;
-   c. sell, rent, lease or sublicense the Software, or distribute it as
-      part of a paid product or service;
+   b. rebrand the Software, including renaming it, removing or replacing
+      its names, or presenting it as your own work or as a product of
+      anyone other than PT Nodespark Digital Tech;
+   c. sell, rent, lease or sublicense the Software on its own, or
+      distribute it as a standalone library or SDK under any name;
    d. remove or alter any copyright, license or trademark notice in the
       Software.
 
-3. Commercial use and modifications
+3. Other uses
 
-   Commercial use and modified versions of the Software require a
-   separate written license from PT Nodespark Digital Tech. Contact
-   info@nodespark.org.
+   Modified versions, rebranded versions or any use not allowed above
+   require a separate written license from PT Nodespark Digital Tech.
+   Contact info@nodespark.org.
 
 4. Trademarks
 
    The VexConnect and NodeSpark names and logos are trademarks of
-   PT Nodespark Digital Tech. This license grants no right to use them,
-   except to identify the unmodified Software.
+   PT Nodespark Digital Tech. You may use the VexConnect name only to
+   state that your application uses the unmodified Software.
 
 5. Termination
 
