@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/vexconnect-lockup.svg" alt="VexConnect" width="420"></p>
+
 # VexConnect for Android
 
 Android SDK for wallets that connect to Vexanium dApps over VexConnect.
