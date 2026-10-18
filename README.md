@@ -30,7 +30,7 @@ Then add the dependency to your app module. Replace the version with the latest 
 
 ```kotlin
 dependencies {
-    implementation("com.github.NodeSpark-Labs:vexconnect-android:v1.0.2")
+    implementation("com.github.NodeSpark-Labs:vexconnect-android:v1.0.3")
 }
 ```
 
