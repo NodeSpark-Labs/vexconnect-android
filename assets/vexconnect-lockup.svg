@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 360" width="1240" height="360">
+  <rect width="1240" height="360" fill="#0B1626"/>
+  <g transform="translate(60,52) scale(0.5)">
+    <g stroke-linecap="round" stroke-width="46" fill="none">
+      <line x1="150" y1="148" x2="256" y2="364" stroke="#0284C7"/>
+      <line x1="362" y1="148" x2="256" y2="364" stroke="#38BDF8"/>
+    </g>
+    <circle cx="150" cy="148" r="38" fill="#0B1626" stroke="#0284C7" stroke-width="18"/>
+    <circle cx="362" cy="148" r="38" fill="#0B1626" stroke="#38BDF8" stroke-width="18"/>
+    <circle cx="256" cy="364" r="40" fill="#F2B90C"/>
+  </g>
+  <text x="350" y="212" font-family="Inter Display, Inter, sans-serif" font-weight="700" font-size="128" letter-spacing="-3" fill="#F3F2EE">Vex<tspan fill="#38BDF8">Connect</tspan></text>
+</svg>
