@@ -37,7 +37,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId    = "com.github.NodeSpark-Labs"
                 artifactId = "vexconnect-android"
-                version    = "1.0.2"
+                version    = "1.0.3"
             }
         }
         repositories {
